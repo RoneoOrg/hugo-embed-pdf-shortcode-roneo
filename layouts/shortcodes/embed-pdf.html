@@ -1,7 +1,10 @@
 {{/*  Source: https://github.com/anvithks/hugo-embed-pdf-shortcode
       updated from here to display all pages instead of a pagination: https://github.com/SuryaThiru/portfolio/blob/main/layouts/shortcodes/embed-pdf.html  */}}
 
-<script type="text/javascript" src='{{"/js/pdf-js/build/pdf.js" | relURL}}'></script>
+{{- if not ($.Page.Scratch.Get "embed-pdf-count") -}}
+
+  <script type="text/javascript" src='{{"/js/pdf-js/build/pdf.js" | relURL}}'></script>
+
 
 <style>
 #embed-pdf-container {
@@ -73,8 +76,8 @@
 }
 
 #overlayText svg {
-  max-width: 1.4em;
-  max-height: 1.4em;
+  height: clamp(1em, 2vw, 1.4em);
+  width:  clamp(1em, 2vw, 1.4em);
 }
 
 
@@ -87,63 +90,73 @@
 }
 </style>
 
-<div id="embed-pdf-container">
-  <div id="loadingWrapper">
-    <div id="loading"></div>
+{{- end -}}
+
+{{- $.Page.Scratch.Add "embed-pdf-count" 1 -}}
+
+
+<div class="embed-pdf-container" id="embed-pdf-container-{{ substr (.Get "url" | md5) 0 8 }}">
+  <div class="pdf-loadingWrapper" id="pdf-loadingWrapper-{{ substr (.Get "url" | md5) 0 8 }}">
+      <div class="pdf-loading" id="pdf-loading-{{ substr (.Get "url" | md5) 0 8 }}"></div>
   </div>
-  <div id="overlayText">
-    <a href="{{ .Get "url" }}" aria-label="Download" download>
-      <svg aria-hidden="true"  xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
-        <path stroke-linecap="round" stroke-linejoin="round" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
-      </svg>
-    </a>
-  </div>
-  <!-- Dynamically add canvas here -->
+  <canvas class="pdf-canvas" id="pdf-canvas-{{ substr (.Get "url" | md5) 0 8 }}"></canvas>
 </div>
 
+<div class="pdf-paginator" id="pdf-paginator-{{ substr (.Get "url" | md5) 0 8 }}">
+  <button id="pdf-prev-{{ substr (.Get "url" | md5) 0 8 }}">Previous</button>
+  <button id="pdf-next-{{ substr (.Get "url" | md5) 0 8 }}">Next</button> &nbsp; &nbsp;
+  <span>
+    <span class="pdf-pagenum" id="pdf-pagenum-{{ substr (.Get "url" | md5) 0 8 }}"></span> / <span class="pdf-pagecount" id="pdf-pagecount-{{ substr (.Get "url" | md5) 0 8 }}"></span>
+  </span>
+  <a class="pdf-source" id="pdf-source-{{ substr (.Get "url" | md5) 0 8 }}" href="{{ .Get "url" }}">[pdf]</a>
+</div>
+
+<noscript>
+View the PDF file <a class="pdf-source" id="pdf-source-noscript-{{ substr (.Get "url" | md5) 0 8 }}" href="{{ .Get "url" }}">here</a>.
+</noscript>
+
 <script type="text/javascript">
-window.onload = function() {
-// If absolute URL from the remote server is provided, configure the CORS
-// header on that server.
+(function(){
 var url = '{{ .Get "url" }}';
 
+var hidePaginator = "{{ .Get "hidePaginator" }}" === "true";
 var hideLoader = "{{ .Get "hideLoader" }}" === "true";
+var selectedPageNum = parseInt("{{ .Get "renderPageNum" }}") || 1;
 
 // Loaded via <script> tag, create shortcut to access PDF.js exports.
 var pdfjsLib = window['pdfjs-dist/build/pdf'];
 
 // The workerSrc property shall be specified.
-pdfjsLib.GlobalWorkerOptions.workerSrc = "{{.Site.BaseURL}}" + '/js/pdf-js/build/pdf.worker.js';
+if(pdfjsLib.GlobalWorkerOptions.workerSrc == '')
+  pdfjsLib.GlobalWorkerOptions.workerSrc = "{{.Site.BaseURL}}" + 'js/pdf-js/build/pdf.worker.js';
 
-// Change the Scale value for lower or higher resolution. Start from first page.
+// Change the Scale value for lower or higher resolution.
 var pdfDoc = null,
-    pageNum = 1,
+    pageNum = selectedPageNum,
     pageRendering = false,
     pageNumPending = null,
     scale = 3,
-    loadingWrapper = document.getElementById('loadingWrapper');
+    canvas = document.getElementById('pdf-canvas-{{ substr (.Get "url" | md5) 0 8 }}'),
+    ctx = canvas.getContext('2d'),
+    paginator = document.getElementById("pdf-paginator-{{ substr (.Get "url" | md5) 0 8 }}"),
+    loadingWrapper = document.getElementById('pdf-loadingWrapper-{{ substr (.Get "url" | md5) 0 8 }}');
 
 
 // Attempt to show paginator and loader if enabled
+showPaginator();
 showLoader();
 
 /**
- * Get page info from document, resize canvas accordingly, and render page.
- * @param num Page number.
- */
+* Get page info from document, resize canvas accordingly, and render page.
+* @param num Page number.
+*/
 function renderPage(num) {
   pageRendering = true;
   // Using promise to fetch the page
   pdfDoc.getPage(num).then(function(page) {
-    var pdf_cont = document.getElementById('embed-pdf-container');
-    var canvas = getCanvas(num);
-    pdf_cont.appendChild(canvas);
-
     var viewport = page.getViewport({scale: scale});
     canvas.height = viewport.height;
     canvas.width = viewport.width;
-
-    var ctx = canvas.getContext('2d');
 
     // Render PDF page into canvas context
     var renderContext = {
@@ -155,7 +168,7 @@ function renderPage(num) {
     // Wait for rendering to finish
     renderTask.promise.then(function() {
       pageRendering = false;
-      showContent(canvas);
+      showContent();
 
       if (pageNumPending !== null) {
         // New page rendering is pending
@@ -165,34 +178,39 @@ function renderPage(num) {
     });
   });
 
-}
-
-// Render all pages
-function renderAllPages() {
-  for (var i = 1; i <= pdfDoc.numPages; i++) {
-    renderPage(i);
-  }
+  // Update page counters
+  document.getElementById('pdf-pagenum-{{ substr (.Get "url" | md5) 0 8 }}').textContent = num;
 }
 
 /**
- * Hides loader and shows canvas
- */
-function showContent(canvas) {
+  * Hides loader and shows canvas
+  */
+function showContent() {
   loadingWrapper.style.display = 'none';
   canvas.style.display = 'block';
 }
 
 /**
- * If we haven't disabled the loader, show loader and hide canvas
- */
+  * If we haven't disabled the loader, show loader and hide canvas
+  */
 function showLoader() {
+  if(hideLoader) return
   loadingWrapper.style.display = 'flex';
+  canvas.style.display = 'none';
 }
 
 /**
- * If another page rendering in progress, waits until the rendering is
- * finished. Otherwise, executes rendering immediately.
- */
+  * If we haven't disabled the paginator, show paginator
+  */
+function showPaginator() {
+  if(hidePaginator) return
+  paginator.style.display = 'block';
+}
+
+/**
+  * If another page rendering in progress, waits until the rendering is
+  * finished. Otherwise, executes rendering immediately.
+  */
 function queueRenderPage(num) {
   if (pageRendering) {
     pageNumPending = num;
@@ -201,25 +219,45 @@ function queueRenderPage(num) {
   }
 }
 
-
 /**
- * Adds a canvas to DOM
- */
-function getCanvas(num) {
-  var canvasId = 'embed-pdf-container-' + num;
-  var canvas = document.createElement("canvas");
-  canvas.id = canvasId;
-  canvas.className = 'pdf-canvas';
-  return canvas
+  * Displays previous page.
+  */
+function onPrevPage() {
+  if (pageNum <= 1) {
+    return;
+  }
+  pageNum--;
+  queueRenderPage(pageNum);
 }
+document.getElementById('pdf-prev-{{ substr (.Get "url" | md5) 0 8 }}').addEventListener('click', onPrevPage);
 
 /**
- * Asynchronously downloads PDF.
- */
+  * Displays next page.
+  */
+function onNextPage() {
+  if (pageNum >= pdfDoc.numPages) {
+    return;
+  }
+  pageNum++;
+  queueRenderPage(pageNum);
+}
+document.getElementById('pdf-next-{{ substr (.Get "url" | md5) 0 8 }}').addEventListener('click', onNextPage);
+
+/**
+  * Asynchronously downloads PDF.
+  */
 pdfjsLib.getDocument(url).promise.then(function(pdfDoc_) {
   pdfDoc = pdfDoc_;
-  renderAllPages();
-});
-}
+  var numPages = pdfDoc.numPages;
+  document.getElementById('pdf-pagecount-{{ substr (.Get "url" | md5) 0 8 }}').textContent = numPages;
 
+  // If the user passed in a number that is out of range, render the last page.
+  if(pageNum > numPages) {
+    pageNum = numPages
+  }
+
+  // Initial/first page rendering
+  renderPage(pageNum);
+});
+})();
 </script>
